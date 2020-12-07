@@ -26,7 +26,11 @@ function add_mappings(type, state) {
 }
 
 function mqtt_publish(topic, value) {
+    if (equal(old_state[topic], value))
+        return
+
     mqtt.publish(config.mqtt.prefix + topic, JSON.stringify(value), { retain: config.mqtt.retain })
+    old_state[topic] = value;
 }
 
 const mqtt = Mqtt.connect(config.mqtt.url, {
@@ -67,7 +71,6 @@ mqtt.on('message', function (topic, message) {
         console.log(`Couldn't handle topic: ${topic} message: ${message}`)
         return
     }
-    const id = name_to_id[name]
     const type = name_to_type[name]
 
     if (type === "sensors") {
@@ -88,7 +91,6 @@ mqtt.on('message', function (topic, message) {
     }
 
     set_hue_state(type, name, obj)
-    console.log(message.toString())
 })
 
 async function get_hue_state(type) {
@@ -120,8 +122,6 @@ async function update_lights() {
 
     for (const id of Object.keys(state)) {
         const e = state[id]
-        if (old_state.lights && equal(old_state.lights[id], e))
-            continue
 
         let obj = {};
         if (e.state?.on !== undefined)
@@ -136,10 +136,8 @@ async function update_lights() {
         if (e.state?.ct !== undefined)
             obj.color_temp = e.state.ct
 
-        if (!equal(obj, {}))
-            mqtt_publish(`/${id_to_name.lights[id]}`, obj)
+        mqtt_publish(`/${id_to_name.lights[id]}`, obj)
     }
-    old_state.lights = state;
 }
 
 async function update_groups() {
@@ -147,9 +145,6 @@ async function update_groups() {
 
     for (const id of Object.keys(state)) {
         const e = state[id]
-
-        if (old_state.groups && equal(old_state.groups[id], e))
-            continue
 
         let obj = {};
 
@@ -159,10 +154,8 @@ async function update_groups() {
         if (e.state?.all_on)
             obj.state = "ON"
 
-        if (!equal(obj, {}))
-            mqtt_publish(`/${id_to_name.groups[id]}`, obj)
+        mqtt_publish(`/${id_to_name.groups[id]}`, obj)
     }
-    old_state.groups = state;
 }
 
 async function update_sensors() {
@@ -170,9 +163,6 @@ async function update_sensors() {
 
     for (const id of Object.keys(state)) {
         const e = state[id]
-
-        if (old_state.sensors && equal(old_state.sensors[id], e))
-            continue;
 
         let obj = {}
 
@@ -204,11 +194,8 @@ async function update_sensors() {
                 obj = null
         }
 
-        if (obj)
-            mqtt_publish(`/${id_to_name.sensors[id]}`, obj)
+        mqtt_publish(`/${id_to_name.sensors[id]}`, obj)
     }
-
-    old_state.sensors = state;
 }
 
 async function start() {
