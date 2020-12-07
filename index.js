@@ -4,23 +4,26 @@
 
 const config = require('./config.json')
 
+const http = require('http');
 const Mqtt = require('mqtt')
 const fetch = require('node-fetch')
 const equal = require('deep-equal');
 
+const httpAgent = new http.Agent({ keepAlive: true });
+
 let old_state = {}
-let bridgeConnected = false
 
 let name_to_id = {}
 let name_to_type = {}
-let id_to_name = {}
+let id_to_name = { lights: {}, groups: {}, sensors: {} }
 
 function add_mappings(type, state) {
     for (const id of Object.keys(state)) {
         const name = state[id].name
+        if (name_to_id[name] !== undefined)
+            continue
         name_to_id[name] = id
         name_to_type[name] = type
-        id_to_name[type] = id_to_name[type] || {}
         id_to_name[type][id] = name
     }
 }
@@ -95,7 +98,7 @@ mqtt.on('message', function (topic, message) {
 
 async function get_hue_state(type) {
     try {
-        const response = await fetch(`http://${config.hue.host}/api/${config.hue.username}/${type}`)
+        const response = await fetch(`http://${config.hue.host}/api/${config.hue.username}/${type}`, { agent: httpAgent })
         const state = await response.json()
         add_mappings(type, state)
         return state
@@ -112,9 +115,9 @@ async function set_hue_state(type, name, state) {
         }
         throw "unknown type"
     })()
-    const response = await fetch(`http://${config.hue.host}/api/${config.hue.username}/${type}/${name_to_id[name]}/${command}`, { method: "PUT", body: JSON.stringify(state) })
+    const response = await fetch(`http://${config.hue.host}/api/${config.hue.username}/${type}/${name_to_id[name]}/${command}`, { method: "PUT", body: JSON.stringify(state), agent: httpAgent })
     const reply = await response.json()
-    console.log(reply);
+    //console.log(reply);
 }
 
 async function update_lights() {
