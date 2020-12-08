@@ -100,9 +100,10 @@ mqtt.on('message', function (topic, message) {
 async function get_hue_state(type) {
     try {
         const response = await fetch(`http://${config.hue.host}/api/${config.hue.username}/${type}`, { agent: httpAgent })
-        const state = await response.json()
+        let state = await response.text()
         if (state === old_received_states[type])
             return null
+        state = JSON.parse(state)
         add_mappings(type, state)
         old_received_states[type] = state
         return state
