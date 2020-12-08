@@ -11,6 +11,7 @@ const equal = require('deep-equal');
 
 const httpAgent = new http.Agent({ keepAlive: true });
 
+let old_received_states = { lights: null, groups: null, sensors: null }
 let old_state = {}
 
 let name_to_id = {}
@@ -100,7 +101,10 @@ async function get_hue_state(type) {
     try {
         const response = await fetch(`http://${config.hue.host}/api/${config.hue.username}/${type}`, { agent: httpAgent })
         const state = await response.json()
+        if (state === old_received_states[type])
+            return null
         add_mappings(type, state)
+        old_received_states[type] = state
         return state
     } catch (e) {
         return null
@@ -122,6 +126,8 @@ async function set_hue_state(type, name, state) {
 
 async function update_lights() {
     const state = await get_hue_state("lights")
+    if (state === null)
+        return
 
     for (const id of Object.keys(state)) {
         const e = state[id]
@@ -145,6 +151,8 @@ async function update_lights() {
 
 async function update_groups() {
     const state = await get_hue_state("groups")
+    if (state === null)
+        return
 
     for (const id of Object.keys(state)) {
         const e = state[id]
@@ -163,6 +171,8 @@ async function update_groups() {
 
 async function update_sensors() {
     const state = await get_hue_state("sensors")
+    if (state === null)
+        return
 
     for (const id of Object.keys(state)) {
         const e = state[id]
