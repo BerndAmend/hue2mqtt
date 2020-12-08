@@ -103,9 +103,9 @@ async function get_hue_state(type) {
         let state = await response.text()
         if (state === old_received_states[type])
             return null
+        old_received_states[type] = state
         state = JSON.parse(state)
         add_mappings(type, state)
-        old_received_states[type] = state
         return state
     } catch (e) {
         return null
