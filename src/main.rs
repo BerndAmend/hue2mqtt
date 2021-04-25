@@ -30,21 +30,10 @@ async fn main() -> Result<()> {
     let (hue2mqtt_tx, hue2mqtt_rx) = channel(100); // hue -> mqtt
     let (mqtt2hue_tx, mqtt2hue_rx) = channel(100); // mqtt -> hue
 
-    {
-        let hue_config = config.hue;
-        tokio::spawn(async move {
-            hue::main(&hue_config, hue2mqtt_tx, mqtt2hue_rx).await;
-        });
-    }
-
-    {
-        let mqtt_config = config.mqtt;
-        tokio::spawn(async move {
-            mqtt::main(&mqtt_config, mqtt2hue_tx, hue2mqtt_rx).await;
-        });
-    }
-
-    tokio::signal::ctrl_c().await?;
+    tokio::join!(
+        hue::main(&config.hue, hue2mqtt_tx, mqtt2hue_rx),
+        mqtt::main(&config.mqtt, mqtt2hue_tx, hue2mqtt_rx)
+    );
 
     Ok(())
 }
