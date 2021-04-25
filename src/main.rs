@@ -278,9 +278,15 @@ async fn main() -> Result<()> {
 
     let mut strm = cli.get_stream(25);
 
-    let lwt = mqtt::Message::new(
+    let lwt = mqtt::Message::new_retained(
         config.mqtt.prefix.to_owned() + "/connected",
         "false",
+        mqtt::QOS_1,
+    );
+
+    let connected_message = mqtt::Message::new_retained(
+        config.mqtt.prefix.to_owned() + "/connected",
+        "true",
         mqtt::QOS_1,
     );
 
@@ -294,6 +300,7 @@ async fn main() -> Result<()> {
     if let Err(err) = cli.connect(conn_opts).await {
         error!("couldn't connect {}", err);
     } else {
+        let _ = cli.publish(connected_message.clone()).await;
         if let Err(err) = cli
             .subscribe(config.mqtt.prefix.to_owned() + "/+/set", mqtt::QOS_1)
             .await
@@ -335,6 +342,7 @@ async fn main() -> Result<()> {
                         error!("Error reconnecting: {}", err);
                         tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
                     }
+                    let _ = cli.publish(connected_message.clone()).await;
                     if let Err(err) = cli.subscribe(config.mqtt.prefix.to_owned() + "/+/set", mqtt::QOS_1).await {
                         error!("couldn't subscribe {}", err);
                     }
