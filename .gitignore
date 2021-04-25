@@ -1,7 +1,2 @@
-node_modules
-yarn.lock
-
-
-# Added by cargo
-
 /target
+Cargo.lock
