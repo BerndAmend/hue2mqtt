@@ -5,18 +5,18 @@ use futures_util::{pin_mut, stream::StreamExt};
 use log::{debug, error, info, trace};
 use paho_mqtt as mqtt;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HueConfig {
+struct HueConfig {
     address: String,
     username: String,
     polling_interval: u64,
 }
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MqttConfig {
+struct MqttConfig {
     url: String,
     prefix: String,
     retain: bool,
@@ -28,12 +28,6 @@ struct Config {
     mqtt: MqttConfig,
 }
 
-#[derive(Debug)]
-pub struct Message {
-    topic: String,
-    data: String,
-}
-
 #[derive(Debug, Clone)]
 enum Type {
     Lights = 0,
@@ -41,103 +35,21 @@ enum Type {
     Sensors = 2,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct Command {
-    #[serde(skip_deserializing)]
-    on: bool,
-    #[serde(skip_serializing)]
-    state: String,
+type Mapping = HashMap<String, (String, Type)>;
+
+fn add_mapping(mapping: &mut Mapping, id: &str, name: &str, t: Type) {
+    mapping.insert(name.to_owned(), (id.to_owned(), t));
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct LightState {
-    #[serde(skip_serializing)]
-    on: bool,
-    #[serde(skip_deserializing)]
-    state: Option<String>,
-    reachable: bool,
-    #[serde(skip_serializing_if = "Option::is_none", rename(deserialize = "bri"))]
-    brightness: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none", rename(deserialize = "ct"))]
-    color_temp: Option<i64>,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct GroupState {
-    #[serde(skip_serializing)]
-    all_on: bool,
-    #[serde(skip_serializing)]
-    any_on: bool,
-    #[serde(skip_deserializing)]
-    state: String,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct SensorState {
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        rename(deserialize = "lastupdated")
-    )]
-    last_seen: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    battery: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    presence: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    lightlevel: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    dark: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    daylight: Option<bool>,
-}
-
-#[derive(Debug, Clone)]
-struct IdType {
-    id: String,
-    t: Type,
-}
-
-#[derive(Debug)]
-struct Mapping(HashMap<String, IdType>);
-
-impl Mapping {
-    fn new() -> Self {
-        Self(HashMap::new())
-    }
-
-    fn add(&mut self, r#type: &Type, state: &Value) {
-        if !state.is_object() {
-            error!("state {:?} doesn't have the expected structure", r#type);
-            return;
-        }
-
-        for (id, val) in state.as_object().unwrap() {
-            if let Some(Some(name)) = val.get("name").map(|v| v.as_str()) {
-                self.0.insert(
-                    name.to_owned(),
-                    IdType {
-                        id: id.to_owned(),
-                        t: r#type.clone(),
-                    },
-                );
-            } else {
-                error!("name is missing {} {}", id, val);
-            }
-        }
-    }
-
-    fn get(&self, name: &str) -> Option<&IdType> {
-        self.0.get(name)
-    }
-}
-
-fn hue_state_stream(
+fn hue_state_stream<F>(
     config: &HueConfig,
     client: reqwest::Client,
     r#type: &str,
-) -> impl Stream<Item = serde_json::Value> {
+    convert: F,
+) -> impl Stream<Item = (String, String, String)>
+where
+    F: Fn(&Value) -> Option<String>,
+{
     let config = config.clone();
     let r#type = r#type.to_owned();
     stream! {
@@ -166,11 +78,19 @@ fn hue_state_stream(
             };
             if data.is_some() && last != data {
                 last = data;
-                match serde_json::from_str(&last.clone().unwrap()) {
+                match serde_json::from_str::<Value>(&last.clone().unwrap()) {
                     Ok(json) => {
                         debug!("polling let to new {} data", r#type);
                         trace!("new {} data {:#?}", r#type, json);
-                        yield json
+                        for (id, val) in json.as_object().unwrap() {
+                            if let Some(name) = val["name"].as_str() {
+                                if let Some(v) = convert(val) {
+                                    yield (id.to_owned(), name.to_owned(), v)
+                                }
+                            } else {
+                                error!("id {} val {} does not contain a name", id, val);
+                            }
+                        }
                     },
                     Err(err) => error!("couldn't parse requested {} error: {}", r#type, err),
                 }
@@ -226,7 +146,6 @@ async fn publish(
     };
 
     if updated {
-        // handle outgoing messages
         debug!("send message topic: {:?} payload: {}", topic, payload);
         if let Err(err) = client
             .publish(
@@ -244,6 +163,63 @@ async fn publish(
     }
 }
 
+fn convert_light(input: &Value) -> Option<String> {
+    let mut out = serde_json::json!({
+        "state": (if input["state"]["on"].as_bool() == Some(true) { "ON" } else { "OFF"}).to_owned(),
+    });
+
+    if let Some(v) = input["state"]["bri"].as_i64() {
+        out["brightness"] = json!(v);
+    }
+    if let Some(v) = input["state"]["ct"].as_i64() {
+        out["color_temp"] = json!(v);
+    }
+    if let Some(v) = input["state"]["reachable"].as_bool() {
+        out["reachable"] = json!(v);
+    }
+    Some(out.to_string())
+}
+
+fn convert_group(input: &Value) -> Option<String> {
+    Some(serde_json::json!({
+        "state": if input["state"]["any_on"].as_bool() == Some(true) { if input["state"]["any_on"].as_bool() == Some(true) { "ON" } else { "PARTIAL"} } else { "OFF"},
+    }).to_string())
+}
+
+fn convert_sensor(input: &Value) -> Option<String> {
+    if let Some(type_obj) = input["type"].as_str() {
+        match type_obj {
+            "ZHATemperature" | "ZLLTemperature" | "ZLLPresence" | "ZLLLightLevel" => {}
+            _ => return None,
+        }
+    }
+
+    let mut out = json!({});
+
+    if let Some(v) = input["state"]["lastupdated"].as_str() {
+        out["last_seen"] = json!(v);
+    }
+    if let Some(v) = input["config"]["battery"].as_i64() {
+        out["battery"] = json!(v);
+    }
+    if let Some(v) = input["state"]["presence"].as_bool() {
+        out["presence"] = json!(v);
+    }
+    if let Some(v) = input["state"]["lightlevel"].as_i64() {
+        out["lightlevel"] = json!(v);
+    }
+    if let Some(v) = input["state"]["dark"].as_bool() {
+        out["dark"] = json!(v);
+    }
+    if let Some(v) = input["state"]["daylight"].as_bool() {
+        out["daylight"] = json!(v);
+    }
+    if let Some(v) = input["state"]["temperature"].as_f64() {
+        out["temperature"] = json!(v / 100.0);
+    }
+    Some(out.to_string())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
@@ -255,9 +231,9 @@ async fn main() -> Result<()> {
 
     let client = reqwest::Client::new();
 
-    let lights = hue_state_stream(&config.hue, client.clone(), "lights");
-    let groups = hue_state_stream(&config.hue, client.clone(), "groups");
-    let sensors = hue_state_stream(&config.hue, client.clone(), "sensors");
+    let lights = hue_state_stream(&config.hue, client.clone(), "lights", convert_light);
+    let groups = hue_state_stream(&config.hue, client.clone(), "groups", convert_group);
+    let sensors = hue_state_stream(&config.hue, client.clone(), "sensors", convert_sensor);
     pin_mut!(lights);
     pin_mut!(groups);
     pin_mut!(sensors);
@@ -314,24 +290,24 @@ async fn main() -> Result<()> {
             // handle incoming mqtt messages
             Some(incoming) = strm.next() => {
                 if let Some(msg) = incoming {
-                    debug!("received message {:?}", msg);
                     if let Some(name) = msg.topic().split("/").nth(1) {
-                        match serde_json::from_str::<Command>(&msg.payload_str()) {
-                            Ok(mut obj) => {
-                                match obj.state.as_str() {
-                                    "ON" => { obj.on = true;},
-                                    "OFF" => { obj.on = false;},
-                                    _ => {error!("command contained an invalid state {:#?}", msg); break;},
+                        match serde_json::from_str::<serde_json::Value>(&msg.payload_str()) {
+                            Ok(val) => {
+                                let mut out = json!({});
+                                if let Some(v) = val["state"].as_str() {
+                                    match v {
+                                        "ON" => { out["on"] = json!(true);},
+                                        "OFF" => { out["on"] = json!(false);},
+                                        _ => {error!("command contained an invalid state {:#?}", msg);},
+                                    };
                                 }
-                                if let Some(IdType{t, id}) = mapping.get(name) {
-                                    set_hue_state(&config.hue, client.clone(), t, id, &serde_json::to_string(&obj).unwrap()).await;
+                                if let Some((id, t)) = mapping.get(name) {
+                                    set_hue_state(&config.hue, client.clone(), t, id, &out.to_string()).await;
                                 } else {
                                     error!("unknown name {}", name);
                                 }
                             },
-                            Err(err) => {
-                                error!("couldn't parse command {:#?} err: {}", msg, err);
-                            }
+                            Err(err) => error!("received invalid msg {:#?} err {}", msg, err),
                         }
                     } else {
                         error!("received invalid command {:#?}", msg);
@@ -348,90 +324,17 @@ async fn main() -> Result<()> {
                     }
                 }
             },
-            Some(state) = lights.next() => {
-                mapping.add(&Type::Lights, &state);
-
-                for (id, val) in state.as_object().unwrap() {
-                    if let Some(light_state) = val.get("state") {
-                        match serde_json::from_value::<LightState>(light_state.to_owned()) {
-                            Ok(mut obj) => {
-                                obj.state = Some((if obj.on { "ON" } else { "OFF"}).to_owned());
-                                if let Some(name) = val.get("name") {
-                                    if let Some(name) = name.as_str() {
-                                        publish(&mut old_values, &mut cli, &(config.mqtt.prefix.to_owned() + "/" + name), &serde_json::to_string(&obj).unwrap()).await;
-                                    }
-                            } else {
-                                error!("name is missing {} {}", id, val);
-                            }
-                            },
-                            Err(err) => {
-                                error!("couldn't parse light_state {} {} err: {}", id, val, err);
-                            }
-                        }
-                    } else {
-                        error!("state is missing {} {}", id, val);
-                    }
-                }
+            Some((id, name, val)) = lights.next() => {
+                add_mapping(&mut mapping, &id, &name, Type::Lights);
+                publish(&mut old_values, &mut cli, &(config.mqtt.prefix.to_owned() + "/" + &name), &val).await;
             },
-            Some(state) = groups.next() => {
-                mapping.add(&Type::Groups, &state);
-
-                for (id, val) in state.as_object().unwrap() {
-                    if let Some(group_state) = val.get("state") {
-                        match serde_json::from_value::<GroupState>(group_state.to_owned()) {
-                            Ok(mut obj) => {
-                                obj.state = (if obj.any_on { "PARTIAL" } else { "OFF"}).to_owned();
-                                if obj.all_on {
-                                    obj.state = "ON".to_owned();
-                                }
-                                if let Some(name) = val.get("name") {
-                                    if let Some(name) = name.as_str() {
-                                        publish(&mut old_values, &mut cli, &(config.mqtt.prefix.to_owned() + "/" + name), &serde_json::to_string(&obj).unwrap()).await;
-                                    }
-                                } else {
-                                    error!("name is missing {} {}", id, val);
-                                }
-                            },
-                            Err(err) => {
-                                error!("couldn't parse group_state {} {} err: {}", id, val, err);
-                            }
-                        }
-                    } else {
-                        error!("state is missing {} {}", id, val);
-                    }
-                }
+            Some((id, name, val)) = groups.next() => {
+                    add_mapping(&mut mapping, &id, &name, Type::Groups);
+                    publish(&mut old_values, &mut cli, &(config.mqtt.prefix.to_owned() + "/" + &name), &val).await;
             },
-            Some(state) = sensors.next() => {
-                mapping.add(&Type::Sensors, &state);
-
-                for (id, val) in state.as_object().unwrap() {
-                    if let Some(type_obj) = val.get("type") {
-                        match type_obj.as_str().unwrap_or_else(|| "") {
-                            "ZHATemperature" | "ZLLTemperature" | "ZLLPresence" | "ZLLLightLevel" => {
-                                if let Some(group_state) = val.get("state") {
-                                    match serde_json::from_value::<SensorState>(group_state.to_owned()) {
-                                        Ok(mut obj) => {
-                                            obj.temperature = obj.temperature.map(|v| v / 100.0);
-                                            if let Some(name) = val.get("name") {
-                                                if let Some(name) = name.as_str() {
-                                                    publish(&mut old_values, &mut cli, &(config.mqtt.prefix.to_owned() + "/" + name), &serde_json::to_string(&obj).unwrap()).await;
-                                                }
-                                            } else {
-                                                error!("name is missing {} {}", id, val);
-                                            }
-                                        },
-                                        Err(err) => {
-                                            error!("couldn't parse group_state {} {} err: {}", id, val, err);
-                                        }
-                                    }
-                                } else {
-                                    error!("state is missing {} {}", id, val);
-                                }
-                            }
-                            _ => (),
-                        }
-                    }
-                }
+            Some((id, name, val)) = sensors.next() => {
+                    add_mapping(&mut mapping, &id, &name, Type::Sensors);
+                    publish(&mut old_values, &mut cli, &(config.mqtt.prefix.to_owned() + "/" + &name), &val).await;
             },
             Ok(_) = tokio::signal::ctrl_c() => break,
             else => break,
