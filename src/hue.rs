@@ -120,14 +120,15 @@ impl Mapping {
 fn hue_state_stream(config: &Config, r#type: &str) -> impl Stream<Item = serde_json::Value> {
     let config = config.clone();
     let r#type = r#type.to_owned();
+    let client = reqwest::Client::new();
     stream! {
         let mut last = None;
         loop {
-            let data = match reqwest::get(format!(
+            let data = match client.get(format!(
                 "http://{}/api/{}/{}",
                 config.address, config.username, r#type
             ))
-            .await
+            .send().await
             {
                 Ok(result) => match result.text().await {
                     Ok(text) => Some(text),
