@@ -1,11 +1,11 @@
 {
     "hue": {
-        "host": "192.168.178.21",
+        "address": "192.168.178.21",
         "username": "xxx",
-        "polling-interval": 1000
+        "polling_interval": 1000
     },
     "mqtt": {
-        "url": "mqtt://192.168.178.41",
+        "url": "tcp://192.168.178.53",
         "prefix": "hue",
         "retain": true
     }
