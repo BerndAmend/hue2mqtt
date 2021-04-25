@@ -99,7 +99,7 @@ mqtt.on('message', function (topic, message) {
 
 async function get_hue_state(type) {
     try {
-        const response = await fetch(`http://${config.hue.host}/api/${config.hue.username}/${type}`, { agent: httpAgent })
+        const response = await fetch(`http://${config.hue.address}/api/${config.hue.username}/${type}`, { agent: httpAgent })
         let state = await response.text()
         if (state === old_received_states[type])
             return null
@@ -120,7 +120,7 @@ async function set_hue_state(type, name, state) {
         }
         throw "unknown type"
     })()
-    const response = await fetch(`http://${config.hue.host}/api/${config.hue.username}/${type}/${name_to_id[name]}/${command}`, { method: "PUT", body: JSON.stringify(state), agent: httpAgent })
+    const response = await fetch(`http://${config.hue.address}/api/${config.hue.username}/${type}/${name_to_id[name]}/${command}`, { method: "PUT", body: JSON.stringify(state), agent: httpAgent })
     const reply = await response.json()
     //console.log(reply);
 }
@@ -217,7 +217,7 @@ async function start() {
         await update_lights()
         await update_groups()
         await update_sensors()
-        await new Promise(r => setTimeout(r, config.hue["polling-interval"]))
+        await new Promise(r => setTimeout(r, config.hue.polling_interval))
     }
 }
 
