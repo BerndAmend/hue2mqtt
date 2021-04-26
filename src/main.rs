@@ -41,15 +41,12 @@ fn add_mapping(mapping: &mut Mapping, id: &str, name: &str, t: Type) {
     mapping.insert(name.to_owned(), (id.to_owned(), t));
 }
 
-fn hue_state_stream<F>(
+fn hue_state_stream(
     config: &HueConfig,
     client: reqwest::Client,
     r#type: &str,
-    convert: F,
-) -> impl Stream<Item = (String, String, String)>
-where
-    F: Fn(&Value) -> Option<String>,
-{
+    convert: impl Fn(&Value) -> Option<String>,
+) -> impl Stream<Item = (String, String, String)> {
     let config = config.clone();
     let r#type = r#type.to_owned();
     stream! {
@@ -135,8 +132,8 @@ async fn set_hue_state(
 }
 
 async fn publish(
-    old_values: &mut HashMap<String, String>,
     client: &mut mqtt::AsyncClient,
+    old_values: &mut HashMap<String, String>,
     topic: &str,
     payload: &str,
 ) {
@@ -220,6 +217,51 @@ fn convert_sensor(input: &Value) -> Option<String> {
     Some(out.to_string())
 }
 
+async fn handle_incoming_message(
+    msg: &mqtt::Message,
+    mapping: &Mapping,
+    config: &HueConfig,
+    client: reqwest::Client,
+) {
+    match msg.topic().split("/").nth(1) {
+        Some(name) => match serde_json::from_str::<serde_json::Value>(&msg.payload_str()) {
+            Ok(val) => {
+                let mut out = json!({});
+                if let Some(v) = val["state"].as_str() {
+                    match v {
+                        "ON" => out["on"] = json!(true),
+                        "OFF" => out["on"] = json!(false),
+                        _ => error!("command contained an invalid state {:#?}", msg),
+                    };
+                }
+                if let Some((id, t)) = mapping.get(name) {
+                    set_hue_state(&config, client.clone(), t, id, &out.to_string()).await;
+                } else {
+                    error!("unknown name {}", name);
+                }
+            }
+            Err(err) => error!("received invalid msg {:#?} err {}", msg, err),
+        },
+        None => error!("received invalid command {:#?}", msg),
+    }
+}
+
+async fn on_connected(cli: &mut mqtt::AsyncClient, config: &MqttConfig) {
+    let _ = cli
+        .publish(mqtt::Message::new_retained(
+            config.prefix.to_owned() + "/connected",
+            "true",
+            mqtt::QOS_1,
+        ))
+        .await;
+    if let Err(err) = cli
+        .subscribe(config.prefix.to_owned() + "/+/set", mqtt::QOS_1)
+        .await
+    {
+        error!("couldn't subscribe {}", err);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
@@ -247,10 +289,7 @@ async fn main() -> Result<()> {
         .mqtt_version(mqtt::MQTT_VERSION_5)
         .finalize();
 
-    let mut cli = mqtt::AsyncClient::new(create_opts).unwrap_or_else(|e| {
-        error!("Error creating the client: {:?}", e);
-        std::process::exit(1);
-    });
+    let mut cli = mqtt::AsyncClient::new(create_opts)?;
 
     let mut strm = cli.get_stream(25);
 
@@ -260,81 +299,47 @@ async fn main() -> Result<()> {
         mqtt::QOS_1,
     );
 
-    let connected_message = mqtt::Message::new_retained(
-        config.mqtt.prefix.to_owned() + "/connected",
-        "true",
-        mqtt::QOS_1,
-    );
-
-    let conn_opts = mqtt::ConnectOptionsBuilder::new()
-        .mqtt_version(mqtt::MQTT_VERSION_5)
-        .keep_alive_interval(std::time::Duration::from_secs(30))
-        .will_message(lwt.clone())
-        .finalize();
-
     debug!("Connecting to the MQTT server...");
-    if let Err(err) = cli.connect(conn_opts).await {
+    if let Err(err) = cli
+        .connect(
+            mqtt::ConnectOptionsBuilder::new()
+                .mqtt_version(mqtt::MQTT_VERSION_5)
+                .keep_alive_interval(std::time::Duration::from_secs(30))
+                .will_message(lwt.clone())
+                .finalize(),
+        )
+        .await
+    {
         error!("couldn't connect {}", err);
     } else {
-        let _ = cli.publish(connected_message.clone()).await;
-        if let Err(err) = cli
-            .subscribe(config.mqtt.prefix.to_owned() + "/+/set", mqtt::QOS_1)
-            .await
-        {
-            error!("couldn't subscribe {}", err);
-        }
+        on_connected(&mut cli, &config.mqtt).await;
     }
 
     loop {
         tokio::select! {
-            // handle incoming mqtt messages
             Some(incoming) = strm.next() => {
                 if let Some(msg) = incoming {
-                    if let Some(name) = msg.topic().split("/").nth(1) {
-                        match serde_json::from_str::<serde_json::Value>(&msg.payload_str()) {
-                            Ok(val) => {
-                                let mut out = json!({});
-                                if let Some(v) = val["state"].as_str() {
-                                    match v {
-                                        "ON" => { out["on"] = json!(true);},
-                                        "OFF" => { out["on"] = json!(false);},
-                                        _ => {error!("command contained an invalid state {:#?}", msg);},
-                                    };
-                                }
-                                if let Some((id, t)) = mapping.get(name) {
-                                    set_hue_state(&config.hue, client.clone(), t, id, &out.to_string()).await;
-                                } else {
-                                    error!("unknown name {}", name);
-                                }
-                            },
-                            Err(err) => error!("received invalid msg {:#?} err {}", msg, err),
-                        }
-                    } else {
-                        error!("received invalid command {:#?}", msg);
-                    }
+                    handle_incoming_message(&msg, &mapping, &config.hue, client.clone()).await;
                 } else {
                     error!("Lost connection. Attempting reconnect.");
                     while let Err(err) = cli.reconnect().await {
                         error!("Error reconnecting: {}", err);
                         tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
                     }
-                    let _ = cli.publish(connected_message.clone()).await;
-                    if let Err(err) = cli.subscribe(config.mqtt.prefix.to_owned() + "/+/set", mqtt::QOS_1).await {
-                        error!("couldn't subscribe {}", err);
-                    }
+                    on_connected(&mut cli, &config.mqtt).await;
                 }
             },
             Some((id, name, val)) = lights.next() => {
                 add_mapping(&mut mapping, &id, &name, Type::Lights);
-                publish(&mut old_values, &mut cli, &(config.mqtt.prefix.to_owned() + "/" + &name), &val).await;
+                publish(&mut cli, &mut old_values, &(config.mqtt.prefix.to_owned() + "/" + &name), &val).await;
             },
             Some((id, name, val)) = groups.next() => {
-                    add_mapping(&mut mapping, &id, &name, Type::Groups);
-                    publish(&mut old_values, &mut cli, &(config.mqtt.prefix.to_owned() + "/" + &name), &val).await;
+                add_mapping(&mut mapping, &id, &name, Type::Groups);
+                publish(&mut cli, &mut old_values, &(config.mqtt.prefix.to_owned() + "/" + &name), &val).await;
             },
             Some((id, name, val)) = sensors.next() => {
-                    add_mapping(&mut mapping, &id, &name, Type::Sensors);
-                    publish(&mut old_values, &mut cli, &(config.mqtt.prefix.to_owned() + "/" + &name), &val).await;
+                add_mapping(&mut mapping, &id, &name, Type::Sensors);
+                publish(&mut cli, &mut old_values, &(config.mqtt.prefix.to_owned() + "/" + &name), &val).await;
             },
             Ok(_) = tokio::signal::ctrl_c() => break,
             else => break,
