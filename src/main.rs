@@ -15,6 +15,7 @@ struct HueConfig {
     username: String,
     polling_interval: u64,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 struct MqttConfig {
     url: String,
@@ -45,7 +46,7 @@ fn hue_state_stream(
     config: &HueConfig,
     client: reqwest::Client,
     r#type: &str,
-    convert: impl Fn(&Value) -> Option<String>,
+    convert: fn(&Value) -> Option<String>,
 ) -> impl Stream<Item = (String, String, String)> {
     let config = config.clone();
     let r#type = r#type.to_owned();
@@ -194,7 +195,12 @@ fn convert_sensor(input: &Value) -> Option<String> {
     let mut out = json!({});
 
     if let Some(v) = input["state"]["lastupdated"].as_str() {
-        out["last_seen"] = json!(v);
+        let last_seen = if v.ends_with('Z') {
+            v.to_owned()
+        } else {
+            v.to_owned() + "Z"
+        };
+        out["last_seen"] = json!(last_seen);
     }
     if let Some(v) = input["config"]["battery"].as_i64() {
         out["battery"] = json!(v);
