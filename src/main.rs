@@ -277,7 +277,11 @@ async fn main() -> Result<()> {
     .with_context(|| "Couldn't parse config file")?;
     info!("hue2mqtt\nconfig: {:#?}", config);
 
-    let client = reqwest::Client::new();
+    let client = reqwest::ClientBuilder::new()
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .with_context(|| "Couldn't create the reqwest::Client")?;
 
     let lights = hue_state_stream(&config.hue, client.clone(), "lights", convert_light);
     let groups = hue_state_stream(&config.hue, client.clone(), "groups", convert_group);
