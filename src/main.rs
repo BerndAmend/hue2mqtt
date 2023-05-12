@@ -229,7 +229,7 @@ async fn handle_incoming_message(
     config: &HueConfig,
     client: reqwest::Client,
 ) {
-    match msg.topic().split("/").nth(1) {
+    match msg.topic().split('/').nth(1) {
         Some(name) => match serde_json::from_str::<serde_json::Value>(&msg.payload_str()) {
             Ok(val) => {
                 let mut out = json!({});
@@ -241,7 +241,7 @@ async fn handle_incoming_message(
                     };
                 }
                 if let Some((id, t)) = mapping.get(name) {
-                    set_hue_state(&config, client.clone(), t, id, &out.to_string()).await;
+                    set_hue_state(config, client.clone(), t, id, &out.to_string()).await;
                 } else {
                     error!("unknown name {}", name);
                 }
@@ -313,7 +313,6 @@ async fn main() -> Result<()> {
     if let Err(err) = cli
         .connect(
             mqtt::ConnectOptionsBuilder::new()
-                .mqtt_version(mqtt::MQTT_VERSION_5)
                 .keep_alive_interval(std::time::Duration::from_secs(30))
                 .will_message(lwt.clone())
                 .finalize(),
