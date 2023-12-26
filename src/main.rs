@@ -3,6 +3,7 @@ use async_stream::stream;
 use futures_core::stream::Stream;
 use futures_util::{pin_mut, stream::StreamExt};
 use log::{debug, error, info, trace};
+use mqtt::properties;
 use paho_mqtt as mqtt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -152,6 +153,9 @@ async fn publish(
                     .payload(payload)
                     .qos(1)
                     .retained(true)
+                    .properties(mqtt::properties![
+                        mqtt::PropertyCode::PayloadFormatIndicator => 1,
+                    ])
                     .finalize(),
             )
             .await
