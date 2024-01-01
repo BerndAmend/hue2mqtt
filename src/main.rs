@@ -244,6 +244,12 @@ async fn handle_incoming_message(
                         _ => error!("command contained an invalid state {:#?}", msg),
                     };
                 }
+                if let Some(v) = val["brightness"].as_u64() {
+                    out["bri"] = json!(v);
+                }
+                if let Some(v) = val["color_temp"].as_u64() {
+                    out["ct"] = json!(v);
+                }
                 if let Some((id, t)) = mapping.get(name) {
                     set_hue_state(config, client.clone(), t, id, &out.to_string()).await;
                 } else {
