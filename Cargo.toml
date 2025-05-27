@@ -1,5 +1,5 @@
 [package]
-edition = "2021"
+edition = "2024"
 name = "hue2mqtt"
 version = "0.1.0"
 
@@ -8,12 +8,12 @@ version = "0.1.0"
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
-env_logger = "0.10"
+env_logger = "0.11"
 futures-core = "0.3"
 futures-util = "0.3"
 log = "0.4"
-paho-mqtt = "0.12"
-reqwest = {version = "0.11", features = ["json"]}
+paho-mqtt = "0.13"
+reqwest = {version = "0.12.6", features = ["json"]}
 serde = {version = "1", features = ["derive"]}
 serde_json = "1"
 tokio = {version = "1", features = ["full"]}
