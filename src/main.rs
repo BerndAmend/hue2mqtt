@@ -20,6 +20,8 @@ struct HueConfig {
 #[derive(Debug, Serialize, Deserialize)]
 struct MqttConfig {
     url: String,
+    username: String,
+    password: String,
     prefix: String,
     retain: bool,
 }
@@ -323,6 +325,8 @@ async fn main() -> Result<()> {
     if let Err(err) = cli
         .connect(
             mqtt::ConnectOptionsBuilder::new()
+                .user_name(&config.mqtt.username)
+                .password(&config.mqtt.password)
                 .keep_alive_interval(std::time::Duration::from_secs(30))
                 .will_message(lwt.clone())
                 .finalize(),
